@@ -1,27 +1,37 @@
 #!/usr/bin/env python3
 """
-字体渲染工具：使用指定字体将字符导出为图片。
+字体渲染工具：使用指定字体将字符导出为图片或SVG。
 
 依赖安装：
-    pip install Pillow
+pip install Pillow cairosvg
 
 用法：
-    # 每个字符单独导出为一张图片
-    python font_to_image.py -f 字体.ttf -t "你好世界" -o output_dir/ --mode single
+# 每个字符单独导出为一张图片
+python font_to_image.py -f 字体.ttf -t "你好世界" -o output_dir/ --mode single
 
-    # 所有字符渲染到一张图片上
-    python font_to_image.py -f 字体.ttf -t "Hello你好" -o output.png --mode combined
+# 所有字符渲染到一张图片上
+python font_to_image.py -f 字体.ttf -t "Hello你好" -o output.png --mode combined
 
-    # 自定义样式
-    python font_to_image.py -f 字体.ttf -t "ABC" -o out/ --mode single \
-        --size 128 --color "#FF0000" --bg "#FFFFFF" --padding 20
+# 单行文字渲染为SVG
+python font_to_image.py -f 字体.ttf -t "Hello" -o output.svg --mode single_line
+
+# 自定义样式
+python font_to_image.py -f 字体.ttf -t "ABC" -o out/ --mode single \
+  --size 128 --color "#FF0000" --bg "#FFFFFF" --padding 20
 """
 
 import argparse
+import base64
 import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+
+try:
+    import cairosvg  # noqa: F401
+    HAS_CAIROSVG = True
+except ImportError:
+    HAS_CAIROSVG = False
 
 
 def render_single_chars(
@@ -86,6 +96,119 @@ def render_single_chars(
         print(f"  [{codepoint}] '{char}' → {filename}  ({img_w}×{img_h})")
 
     return saved_files
+
+
+def render_single_line_svg(
+    font_path: str,
+    text: str,
+    output_path: str,
+    font_size: int = 128,
+    color: str = "#000000",
+    bg_color: str | None = None,
+    padding: int = 16,
+) -> str:
+    """
+    将整段文字渲染为SVG矢量图。
+
+    参数:
+        font_path: 字体文件路径
+        text: 要渲染的文字
+        output_path: 输出文件路径
+        font_size: 字体大小（像素）
+        color: 字体颜色（十六进制）
+        bg_color: 背景色（None 表示透明）
+        padding: 内边距（像素）
+
+    返回:
+        输出文件路径
+    """
+    font = ImageFont.truetype(font_path, font_size)
+    bbox = font.getbbox(text)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    img_w = text_w + padding * 2
+    img_h = text_h + padding * 2
+
+    font_data = Path(font_path).read_bytes()
+    font_base64 = base64.b64encode(font_data).decode("utf-8")
+    font_name = Path(font_path).stem
+
+    text_x = padding - bbox[0]
+    text_y = padding - bbox[1]
+
+    bg_rect = ""
+    if bg_color:
+        bg_rect = f'<rect width="{img_w}" height="{img_h}" fill="{bg_color}"/>'
+
+    svg_content = f'''<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="{img_w}" height="{img_h}" viewBox="0 0 {img_w} {img_h}">
+  <defs>
+    <style>
+      @font-face {{
+        font-family: "{font_name}";
+        src: url("data:font/ttf;base64,{font_base64}") format("truetype");
+      }}
+    </style>
+  </defs>
+  {bg_rect}
+  <text x="{text_x}" y="{text_y + font_size}" font-family="{font_name}" font-size="{font_size}" fill="{color}">{text}</text>
+</svg>'''
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text(svg_content, encoding="utf-8")
+    print(f" 单行SVG已保存 → {output_path} ({img_w}×{img_h})")
+    return output_path
+
+
+def render_single_line(
+    font_path: str,
+    text: str,
+    output_path: str,
+    font_size: int = 128,
+    color: str = "#000000",
+    bg_color: str | None = None,
+    padding: int = 16,
+    image_format: str = "png",
+) -> str:
+    """
+    将整段文字渲染为单行图片。
+
+    参数:
+        font_path: 字体文件路径
+        text: 要渲染的文字
+        output_path: 输出文件路径
+        font_size: 字体大小（像素）
+        color: 字体颜色（十六进制）
+        bg_color: 背景色（None 表示透明）
+        padding: 内边距（像素）
+        image_format: 输出格式 png / jpg / bmp
+
+    返回:
+        输出文件路径
+    """
+    font = ImageFont.truetype(font_path, font_size)
+    bbox = font.getbbox(text)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    img_w = text_w + padding * 2
+    img_h = text_h + padding * 2
+
+    if bg_color:
+        img = Image.new("RGB", (img_w, img_h), bg_color)
+    else:
+        img = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
+
+    draw = ImageDraw.Draw(img)
+    x = padding - bbox[0]
+    y = padding - bbox[1]
+    draw.text((x, y), text, font=font, fill=color)
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    img.save(output_path)
+    print(f" 单行图片已保存 → {output_path} ({img_w}×{img_h})")
+    return output_path
 
 
 def render_combined(
@@ -196,9 +319,9 @@ def main():
     parser.add_argument("-o", "--output", required=True, help="输出路径（目录或文件）")
     parser.add_argument(
         "--mode",
-        choices=["single", "combined"],
+        choices=["single", "combined", "single_line"],
         default="single",
-        help="single=每字一图，combined=合并到一张图（默认 single）",
+        help="single=每字一图，combined=合并到一张图，single_line=单行文字（默认 single）",
     )
     parser.add_argument("--size", type=int, default=128, help="字体大小，默认 128")
     parser.add_argument("--color", default="#000000", help="字体颜色，默认黑色")
@@ -245,6 +368,31 @@ def main():
             columns=args.columns,
             show_label=not args.no_label,
         )
+
+    elif args.mode == "single_line":
+        bg = args.bg
+        output_ext = Path(args.output).suffix.lower()
+        if output_ext == ".svg":
+            render_single_line_svg(
+                font_path=args.font,
+                text=args.text,
+                output_path=args.output,
+                font_size=args.size,
+                color=args.color,
+                bg_color=bg,
+                padding=args.padding,
+            )
+        else:
+            render_single_line(
+                font_path=args.font,
+                text=args.text,
+                output_path=args.output,
+                font_size=args.size,
+                color=args.color,
+                bg_color=bg,
+                padding=args.padding,
+                image_format=args.format,
+            )
 
 
 if __name__ == "__main__":
